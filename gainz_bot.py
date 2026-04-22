@@ -75,7 +75,9 @@ async def on_ready():
     await monitor_trades(channel)
 
 async def monitor_trades(channel):
-    swap_filter = pair_contract.events.Swap.create_filter(fromBlock="latest")
+    # Fixed: use from_block (snake_case) instead of fromBlock
+    swap_filter = pair_contract.events.Swap.create_filter(from_block="latest")
+    
     while True:
         try:
             for event in swap_filter.get_new_entries():
@@ -87,11 +89,11 @@ async def monitor_trades(channel):
                 tx_hash = event.transactionHash.hex()
 
                 if gainz_is_token0:
-                    if amount0In > 0 and amount1Out > 0:   # SELL
+                    if amount0In > 0 and amount1Out > 0:   # SELL GAINZ for WCRO
                         direction = "🔴 **SELL**"
                         gainz_amount = amount0In / (10 ** gainz_decimals)
                         cro_amount = amount1Out / (10 ** wcro_decimals)
-                    elif amount1In > 0 and amount0Out > 0:  # BUY
+                    elif amount1In > 0 and amount0Out > 0:  # BUY GAINZ with WCRO
                         direction = "🟢 **BUY**"
                         gainz_amount = amount0Out / (10 ** gainz_decimals)
                         cro_amount = amount1In / (10 ** wcro_decimals)
