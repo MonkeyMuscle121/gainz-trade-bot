@@ -13,7 +13,7 @@ CHANNEL_ID = int(os.getenv('CHANNEL_ID'))
 # Cronos settings
 RPC_URL = "https://cronos-evm-rpc.publicnode.com"
 
-# GAINZ Token & VVS Pair (GAINZ/WCRO)
+# GAINZ / WCRO Pair on VVS
 TOKEN_ADDRESS = "0xF7b1095D2af6C81c2d88f0ab44c7c2341BFfc411"
 PAIR_ADDRESS  = "0x3a26c936973635dff0a89ca93e4e62f70514c210"
 
@@ -48,7 +48,7 @@ gainz_is_token0 = token0 == TOKEN_ADDRESS.lower()
 gainz_decimals = token_contract.functions.decimals().call()
 wcro_decimals = 18
 
-print(f"✅ Bot ready! Monitoring ONLY BUY trades on GAINZ/WCRO pair")
+print(f"✅ Bot ready! Only showing BUY trades on GAINZ/WCRO")
 
 # Discord bot
 intents = discord.Intents.default()
@@ -60,7 +60,7 @@ async def on_ready():
     print(f"✅ Bot logged in as {client.user}")
     channel = client.get_channel(CHANNEL_ID)
     if channel:
-        await channel.send("🚀 **GAINZ Buy Bot is now online!** Only showing BUY trades on VVS (GAINZ/WCRO)")
+        await channel.send("🚀 **GAINZ Buy Bot is now online!** Only showing BUY trades (VVS GAINZ/WCRO)")
     await monitor_trades(channel)
 
 async def monitor_trades(channel):
@@ -76,30 +76,33 @@ async def monitor_trades(channel):
                 amount1Out = args['amount1Out']
                 tx_hash = event.transactionHash.hex()
 
-                # Only show BUY trades (GAINZ received)
+                # Only BUY trades (someone buying GAINZ with WCRO)
+                is_buy = False
+                gainz_amount = 0
+                cro_amount = 0
+
                 if gainz_is_token0:
-                    if amount1In > 0 and amount0Out > 0:   # BUY GAINZ with WCRO
-                        direction = "🟢 **BUY**"
+                    if amount1In > 0 and amount0Out > 0:   # BUY
+                        is_buy = True
                         gainz_amount = amount0Out / (10 ** gainz_decimals)
                         cro_amount = amount1In / (10 ** wcro_decimals)
-                    else:
-                        continue
                 else:
-                    if amount0In > 0 and amount1Out > 0:   # BUY GAINZ with WCRO
-                        direction = "🟢 **BUY**"
+                    if amount0In > 0 and amount1Out > 0:   # BUY
+                        is_buy = True
                         gainz_amount = amount1Out / (10 ** gainz_decimals)
                         cro_amount = amount0In / (10 ** wcro_decimals)
-                    else:
-                        continue
+
+                if not is_buy or gainz_amount < 100:   # ignore very small buys
+                    continue
 
                 embed = discord.Embed(
-                    title=f"{direction} $GAINZ",
+                    title="🟢 **BUY** $GAINZ",
                     description=f"**{gainz_amount:,.2f} GAINZ** for **{cro_amount:,.4f} WCRO**",
                     color=0x00ff00
                 )
                 embed.add_field(
                     name="Links",
-                    value=f"[📊 Live Chart on DexScreener](https://dexscreener.com/cronos/0xF7b1095D2af6C81c2d88f0ab44c7c2341BFfc411)\n"
+                    value=f"[📊 Live DexScreener Chart](https://dexscreener.com/cronos/0xF7b1095D2af6C81c2d88f0ab44c7c2341BFfc411)\n"
                           f"[🔗 Transaction](https://explorer.cronos.org/tx/0x{tx_hash})",
                     inline=False
                 )
@@ -110,6 +113,6 @@ async def monitor_trades(channel):
             time.sleep(2)
         except Exception as e:
             print(f"Error: {e}")
-            time.sleep(5)
+            time.sleep(10)   # longer sleep on error to prevent rapid restarts
 
 client.run(DISCORD_TOKEN)
