@@ -13,9 +13,9 @@ CHANNEL_ID = int(os.getenv('CHANNEL_ID'))
 # Cronos settings
 RPC_URL = "https://cronos-evm-rpc.publicnode.com"
 
-# Token & Pair (GAINZ on Cronos) - CHECKSUMMED
+# Token & Pair (GAINZ on Cronos) - CORRECT CHECKSUMMED ADDRESSES
 TOKEN_ADDRESS = "0xF7b1095D2af6C81c2d88f0ab44c7c2341BFfc411"
-PAIR_ADDRESS  = "0x3a26C936973635dFf0A89cA93E4e62f70514c210"
+PAIR_ADDRESS  = "0x3a26c936973635dFF0a89ca93E4e62f70514c210"
 
 # Minimal ABI
 ERC20_ABI = [
