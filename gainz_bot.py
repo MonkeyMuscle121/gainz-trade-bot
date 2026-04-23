@@ -1,5 +1,5 @@
 import os
-import time
+import asyncio
 import discord
 from dotenv import load_dotenv
 from web3 import Web3
@@ -10,21 +10,16 @@ load_dotenv()
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 CHANNEL_ID = int(os.getenv('CHANNEL_ID'))
 
-# Cronos settings
 RPC_URL = "https://cronos-evm-rpc.publicnode.com"
-
-# GAINZ / WCRO Pair on VVS
 TOKEN_ADDRESS = "0xF7b1095D2af6C81c2d88f0ab44c7c2341BFfc411"
-PAIR_ADDRESS  = "0x3a26c936973635dff0a89ca93e4e62f70514c210"
+PAIR_ADDRESS = "0x3a26c936973635dff0a89ca93e4e62f70514c210"
 
-w3 = Web3(Web3.HTTPProvider(RPC_URL))
+w3 = Web3(Web3.HTTPProvider(RPC_URL, request_kwargs={'timeout': 30}))
 TOKEN_ADDRESS = w3.to_checksum_address(TOKEN_ADDRESS)
-PAIR_ADDRESS  = w3.to_checksum_address(PAIR_ADDRESS)
+PAIR_ADDRESS = w3.to_checksum_address(PAIR_ADDRESS)
 
 # ABIs
-ERC20_ABI = [
-    {"constant": True, "inputs": [], "name": "decimals", "outputs": [{"name": "", "type": "uint8"}], "type": "function"}
-]
+ERC20_ABI = [{"constant": True, "inputs": [], "name": "decimals", "outputs": [{"name": "", "type": "uint8"}], "type": "function"}]
 
 PAIR_ABI = [
     {"constant": True, "inputs": [], "name": "token0", "outputs": [{"name": "", "type": "address"}], "type": "function"},
@@ -39,80 +34,88 @@ PAIR_ABI = [
     ], "name": "Swap", "type": "event"}
 ]
 
-# Load contracts
 pair_contract = w3.eth.contract(address=PAIR_ADDRESS, abi=PAIR_ABI)
 token_contract = w3.eth.contract(address=TOKEN_ADDRESS, abi=ERC20_ABI)
 
 token0 = pair_contract.functions.token0().call().lower()
 gainz_is_token0 = token0 == TOKEN_ADDRESS.lower()
 gainz_decimals = token_contract.functions.decimals().call()
-wcro_decimals = 18
 
-print(f"✅ Bot ready! Only showing BUY trades on GAINZ/WCRO")
+print("✅ GAINZ Buy Bot initialized")
 
-# Discord bot
 intents = discord.Intents.default()
-intents.message_content = True
 client = discord.Client(intents=intents)
+channel = None
 
 @client.event
 async def on_ready():
-    print(f"✅ Bot logged in as {client.user}")
+    global channel
+    print(f"✅ Logged in as {client.user}")
     channel = client.get_channel(CHANNEL_ID)
-    if channel:
-        await channel.send("🚀 **GAINZ Buy Bot is now online!** Only showing BUY trades (VVS GAINZ/WCRO)")
-    await monitor_trades(channel)
-
-async def monitor_trades(channel):
-    swap_filter = pair_contract.events.Swap.create_filter(from_block="latest")
     
+    if channel:
+        await channel.send("🚀 **GAINZ Buy Bot is now online!** Only BUY alerts • Paid Render")
+    
+    asyncio.create_task(monitor_trades())
+
+async def monitor_trades():
+    global channel
+    print("📡 Monitoring started...")
+
     while True:
         try:
-            for event in swap_filter.get_new_entries():
-                args = event.args
-                amount0In = args['amount0In']
-                amount1In = args['amount1In']
-                amount0Out = args['amount0Out']
-                amount1Out = args['amount1Out']
-                tx_hash = event.transactionHash.hex()
-
-                # Only BUY trades (someone buying GAINZ with WCRO)
-                is_buy = False
-                gainz_amount = 0
-                cro_amount = 0
-
-                if gainz_is_token0:
-                    if amount1In > 0 and amount0Out > 0:   # BUY
-                        is_buy = True
-                        gainz_amount = amount0Out / (10 ** gainz_decimals)
-                        cro_amount = amount1In / (10 ** wcro_decimals)
-                else:
-                    if amount0In > 0 and amount1Out > 0:   # BUY
-                        is_buy = True
-                        gainz_amount = amount1Out / (10 ** gainz_decimals)
-                        cro_amount = amount0In / (10 ** wcro_decimals)
-
-                if not is_buy or gainz_amount < 100:   # ignore very small buys
-                    continue
-
-                embed = discord.Embed(
-                    title="🟢 **BUY** $GAINZ",
-                    description=f"**{gainz_amount:,.2f} GAINZ** for **{cro_amount:,.4f} WCRO**",
-                    color=0x00ff00
-                )
-                embed.add_field(
-                    name="Links",
-                    value=f"[📊 Live DexScreener Chart](https://dexscreener.com/cronos/0xF7b1095D2af6C81c2d88f0ab44c7c2341BFfc411)\n"
-                          f"[🔗 Transaction](https://explorer.cronos.org/tx/0x{tx_hash})",
-                    inline=False
-                )
-                embed.set_footer(text="VVS Finance • Only BUY alerts • Monkey Muscle 🦧")
-
-                await channel.send(embed=embed)
+            swap_filter = pair_contract.events.Swap.create_filter(from_block="latest")
             
-            time.sleep(2)
+            while True:
+                for event in swap_filter.get_new_entries():
+                    await process_buy(event)
+                
+                await asyncio.sleep(1.5)   # Faster polling on paid tier
+
         except Exception as e:
-            print(f"Error: {e}")
-            time.sleep(10)   # longer sleep on error to prevent rapid restarts
+            print(f"🔴 Monitor error: {e}")
+            await asyncio.sleep(15)
+
+async def process_buy(event):
+    global channel
+    if not channel: 
+        return
+
+    args = event.args
+    tx_hash = event.transactionHash.hex()
+
+    if gainz_is_token0:
+        if args['amount1In'] > 0 and args['amount0Out'] > 0:   # Buy GAINZ
+            gainz_amount = args['amount0Out'] / (10 ** gainz_decimals)
+            cro_amount = args['amount1In'] / 1e18
+        else:
+            return
+    else:
+        if args['amount0In'] > 0 and args['amount1Out'] > 0:
+            gainz_amount = args['amount1Out'] / (10 ** gainz_decimals)
+            cro_amount = args['amount0In'] / 1e18
+        else:
+            return
+
+    if gainz_amount < 100:   # Minimum size filter
+        return
+
+    embed = discord.Embed(
+        title="🟢 **BUY** $GAINZ",
+        description=f"**{gainz_amount:,.2f} GAINZ** for **{cro_amount:,.4f} WCRO**",
+        color=0x00ff00
+    )
+    embed.add_field(
+        name="Links",
+        value=f"[📊 DexScreener](https://dexscreener.com/cronos/0xF7b1095D2af6C81c2d88f0ab44c7c2341BFfc411)\n"
+              f"[🔗 Tx Explorer](https://explorer.cronos.org/tx/0x{tx_hash})",
+        inline=False
+    )
+    embed.set_footer(text="VVS Finance • BUY alerts only • Paid Render")
+
+    try:
+        await channel.send(embed=embed)
+    except Exception as e:
+        print(f"Discord send failed: {e}")
 
 client.run(DISCORD_TOKEN)
