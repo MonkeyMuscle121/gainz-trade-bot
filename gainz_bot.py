@@ -52,7 +52,7 @@ token0 = pair_contract.functions.token0().call().lower()
 gainz_is_token0 = token0 == TOKEN_ADDRESS.lower()
 gainz_decimals = token_contract.functions.decimals().call()
 
-logger.info(f"✅ Setup complete | GAINZ token0: {gainz_is_token0}")
+logger.info(f"✅ GAINZ Setup | Token0: {gainz_is_token0}")
 
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
@@ -65,31 +65,34 @@ async def on_ready():
     channel = client.get_channel(CHANNEL_ID)
     
     if channel:
-        await channel.send("🚀 **GAINZ Buy Bot ONLINE** (web3==6.20.0 Fixed)")
+        await channel.send("🚀 **GAINZ Buy Bot ONLINE**")
     asyncio.create_task(monitor_trades())
 
 async def monitor_trades():
     global channel
-    logger.info("📡 Monitor started...")
+    logger.info("📡 Starting block polling monitor...")
+
+    last_block = w3.eth.block_number - 10  # Start a bit behind
 
     while True:
         try:
-            # Use fromBlock (works with pinned web3 6.x)
-            swap_filter = pair_contract.events.Swap.create_filter(fromBlock="latest")
-            logger.info("🔄 Filter created successfully")
+            current_block = w3.eth.block_number
+            if current_block > last_block:
+                for block_num in range(last_block + 1, current_block + 1):
+                    try:
+                        events = pair_contract.events.Swap.get_logs(fromBlock=block_num, toBlock=block_num)
+                        for event in events:
+                            await process_buy(event)
+                    except Exception as e:
+                        logger.warning(f"Block {block_num} error: {e}")
 
-            while True:
-                events = swap_filter.get_new_entries()
-                for event in events:
-                    await process_buy(event)
-                await asyncio.sleep(2)
+                last_block = current_block
+                logger.info(f"✅ Scanned up to block {current_block} | Last alert check done")
+
+            await asyncio.sleep(4)  # Poll every ~4 seconds
 
         except Exception as e:
-            err = str(e).lower()
-            if "filter not found" in err or "filter" in err:
-                logger.warning("Filter expired - recreating")
-            else:
-                logger.error(f"Error: {e}", exc_info=True)
+            logger.error(f"Monitor loop error: {e}", exc_info=True)
             await asyncio.sleep(10)
 
 async def process_buy(event):
@@ -128,12 +131,12 @@ async def process_buy(event):
                   f"[🔗 Tx](https://explorer.cronos.org/tx/0x{tx_hash})",
             inline=False
         )
-        embed.set_footer(text="VVS Finance • BUY alerts")
+        embed.set_footer(text="VVS Finance • BUY alerts only")
 
         await channel.send(embed=embed)
-        logger.info(f"✅ Alert sent: {gainz_amount:,.0f} GAINZ")
+        logger.info(f"🚀 BUY ALERT SENT → {gainz_amount:,.0f} GAINZ ({cro_amount:.4f} WCRO)")
 
     except Exception as e:
-        logger.error(f"Process error: {e}")
+        logger.error(f"Process buy error: {e}")
 
 client.run(DISCORD_TOKEN)
