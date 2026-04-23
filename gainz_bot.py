@@ -26,7 +26,7 @@ if not w3.is_connected():
     logger.error("❌ Cannot connect to RPC")
     exit(1)
 
-logger.info("✅ Connected to Cronos")
+logger.info("✅ Connected to Cronos RPC")
 
 TOKEN_ADDRESS = w3.to_checksum_address(TOKEN_ADDRESS)
 PAIR_ADDRESS = w3.to_checksum_address(PAIR_ADDRESS)
@@ -54,7 +54,7 @@ token0 = pair_contract.functions.token0().call().lower()
 gainz_is_token0 = token0 == TOKEN_ADDRESS.lower()
 gainz_decimals = token_contract.functions.decimals().call()
 
-logger.info(f"GAINZ is token0: {gainz_is_token0}")
+logger.info(f"✅ GAINZ is token0: {gainz_is_token0} | Decimals: {gainz_decimals}")
 
 # Discord
 intents = discord.Intents.default()
@@ -68,7 +68,7 @@ async def on_ready():
     channel = client.get_channel(CHANNEL_ID)
     
     if channel:
-        await channel.send("🚀 **GAINZ Buy Bot is now ONLINE** (Fixed v2 - Paid Render)")
+        await channel.send("🚀 **GAINZ Buy Bot is now ONLINE** (Fixed v3 - fromBlock)")
     else:
         logger.error("❌ Channel not found!")
 
@@ -76,41 +76,28 @@ async def on_ready():
 
 async def monitor_trades():
     global channel
-    logger.info("📡 Starting monitor...")
+    logger.info("📡 Starting trade monitor...")
 
     while True:
-        filter_id = None
         try:
-            # Create fresh filter every cycle
-            swap_filter = pair_contract.events.Swap.create_filter(from_block="latest")
-            filter_id = swap_filter.filter_id
-            logger.info("🔄 New filter created")
+            # Use fromBlock (camelCase) for newer web3.py
+            swap_filter = pair_contract.events.Swap.create_filter(fromBlock="latest")
+            logger.info("🔄 New Swap filter created")
 
             while True:
-                try:
-                    events = swap_filter.get_new_entries()
-                    for event in events:
-                        await process_buy(event)
+                events = swap_filter.get_new_entries()
+                for event in events:
+                    await process_buy(event)
 
-                    await asyncio.sleep(2)
-
-                except Exception as inner_e:
-                    if "filter not found" in str(inner_e).lower():
-                        logger.warning("Filter expired → recreating")
-                        break
-                    else:
-                        logger.error(f"Inner error: {inner_e}")
-                        await asyncio.sleep(5)
+                await asyncio.sleep(2)
 
         except Exception as e:
-            logger.error(f"Monitor error: {e}", exc_info=True)
+            error_str = str(e).lower()
+            if "filter not found" in error_str or "filter" in error_str:
+                logger.warning("Filter expired → recreating...")
+            else:
+                logger.error(f"Monitor error: {e}", exc_info=True)
             await asyncio.sleep(10)
-        finally:
-            if filter_id:
-                try:
-                    w3.eth.uninstall_filter(filter_id)
-                except:
-                    pass
 
 async def process_buy(event):
     global channel
@@ -145,16 +132,16 @@ async def process_buy(event):
         embed.add_field(
             name="Links",
             value=f"[📊 DexScreener](https://dexscreener.com/cronos/0xF7b1095D2af6C81c2d88f0ab44c7c2341BFfc411)\n"
-                  f"[🔗 Transaction](https://explorer.cronos.org/tx/0x{tx_hash})",
+                  f"[🔗 Tx](https://explorer.cronos.org/tx/0x{tx_hash})",
             inline=False
         )
         embed.set_footer(text="VVS Finance • BUY alerts only")
 
         await channel.send(embed=embed)
-        logger.info(f"✅ Alert sent: {gainz_amount:,.0f} GAINZ")
+        logger.info(f"✅ BUY Alert sent → {gainz_amount:,.0f} GAINZ")
 
     except Exception as e:
-        logger.error(f"Process error: {e}")
+        logger.error(f"Error processing buy: {e}")
 
-# ================== START ==================
+# ================== RUN ==================
 client.run(DISCORD_TOKEN)
