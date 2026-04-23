@@ -58,6 +58,8 @@ intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 channel = None
 
+seen_tx = set()   # ← Deduplication
+
 @client.event
 async def on_ready():
     global channel
@@ -65,34 +67,39 @@ async def on_ready():
     channel = client.get_channel(CHANNEL_ID)
     
     if channel:
-        await channel.send("🚀 **GAINZ Buy Bot ONLINE**")
+        await channel.send("🚀 **GAINZ Buy Bot ONLINE** (Deduplicated)")
     asyncio.create_task(monitor_trades())
 
 async def monitor_trades():
     global channel
-    logger.info("📡 Starting block polling monitor...")
+    logger.info("📡 Starting block polling with deduplication...")
 
-    last_block = w3.eth.block_number - 10  # Start a bit behind
+    last_block = w3.eth.block_number - 5
 
     while True:
         try:
             current_block = w3.eth.block_number
+            
             if current_block > last_block:
                 for block_num in range(last_block + 1, current_block + 1):
-                    try:
-                        events = pair_contract.events.Swap.get_logs(fromBlock=block_num, toBlock=block_num)
-                        for event in events:
-                            await process_buy(event)
-                    except Exception as e:
-                        logger.warning(f"Block {block_num} error: {e}")
-
+                    events = pair_contract.events.Swap.get_logs(fromBlock=block_num, toBlock=block_num)
+                    
+                    for event in events:
+                        tx_hash = event.transactionHash.hex()
+                        
+                        if tx_hash in seen_tx:
+                            continue  # Skip duplicate
+                        
+                        seen_tx.add(tx_hash)
+                        await process_buy(event)
+                
                 last_block = current_block
-                logger.info(f"✅ Scanned up to block {current_block} | Last alert check done")
+                logger.info(f"Scanned blocks up to {current_block} | Seen TXs: {len(seen_tx)}")
 
-            await asyncio.sleep(4)  # Poll every ~4 seconds
+            await asyncio.sleep(3)  # Balanced polling
 
         except Exception as e:
-            logger.error(f"Monitor loop error: {e}", exc_info=True)
+            logger.error(f"Monitor error: {e}", exc_info=True)
             await asyncio.sleep(10)
 
 async def process_buy(event):
@@ -134,9 +141,9 @@ async def process_buy(event):
         embed.set_footer(text="VVS Finance • BUY alerts only")
 
         await channel.send(embed=embed)
-        logger.info(f"🚀 BUY ALERT SENT → {gainz_amount:,.0f} GAINZ ({cro_amount:.4f} WCRO)")
+        logger.info(f"🚀 BUY ALERT → {gainz_amount:,.0f} GAINZ")
 
     except Exception as e:
-        logger.error(f"Process buy error: {e}")
+        logger.error(f"Process error: {e}")
 
 client.run(DISCORD_TOKEN)
