@@ -3,6 +3,7 @@ import asyncio
 import discord
 from dotenv import load_dotenv
 from web3 import Web3
+import logging
 
 load_dotenv()
 
@@ -14,7 +15,19 @@ RPC_URL = "https://cronos-evm-rpc.publicnode.com"
 TOKEN_ADDRESS = "0xF7b1095D2af6C81c2d88f0ab44c7c2341BFfc411"
 PAIR_ADDRESS = "0x3a26c936973635dff0a89ca93e4e62f70514c210"
 
-w3 = Web3(Web3.HTTPProvider(RPC_URL, request_kwargs={'timeout': 30}))
+# Logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Web3
+w3 = Web3(Web3.HTTPProvider(RPC_URL, request_kwargs={'timeout': 60}))
+
+if not w3.is_connected():
+    logger.error("❌ Cannot connect to RPC")
+    exit(1)
+
+logger.info("✅ Connected to Cronos")
+
 TOKEN_ADDRESS = w3.to_checksum_address(TOKEN_ADDRESS)
 PAIR_ADDRESS = w3.to_checksum_address(PAIR_ADDRESS)
 
@@ -41,8 +54,9 @@ token0 = pair_contract.functions.token0().call().lower()
 gainz_is_token0 = token0 == TOKEN_ADDRESS.lower()
 gainz_decimals = token_contract.functions.decimals().call()
 
-print("✅ GAINZ Buy Bot initialized")
+logger.info(f"GAINZ is token0: {gainz_is_token0}")
 
+# Discord
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 channel = None
@@ -50,72 +64,97 @@ channel = None
 @client.event
 async def on_ready():
     global channel
-    print(f"✅ Logged in as {client.user}")
+    logger.info(f"✅ Logged in as {client.user}")
     channel = client.get_channel(CHANNEL_ID)
     
     if channel:
-        await channel.send("🚀 **GAINZ Buy Bot is now online!** Only BUY alerts • Paid Render")
-    
+        await channel.send("🚀 **GAINZ Buy Bot is now ONLINE** (Fixed v2 - Paid Render)")
+    else:
+        logger.error("❌ Channel not found!")
+
     asyncio.create_task(monitor_trades())
 
 async def monitor_trades():
     global channel
-    print("📡 Monitoring started...")
+    logger.info("📡 Starting monitor...")
 
     while True:
+        filter_id = None
         try:
+            # Create fresh filter every cycle
             swap_filter = pair_contract.events.Swap.create_filter(from_block="latest")
-            
+            filter_id = swap_filter.filter_id
+            logger.info("🔄 New filter created")
+
             while True:
-                for event in swap_filter.get_new_entries():
-                    await process_buy(event)
-                
-                await asyncio.sleep(1.5)   # Faster polling on paid tier
+                try:
+                    events = swap_filter.get_new_entries()
+                    for event in events:
+                        await process_buy(event)
+
+                    await asyncio.sleep(2)
+
+                except Exception as inner_e:
+                    if "filter not found" in str(inner_e).lower():
+                        logger.warning("Filter expired → recreating")
+                        break
+                    else:
+                        logger.error(f"Inner error: {inner_e}")
+                        await asyncio.sleep(5)
 
         except Exception as e:
-            print(f"🔴 Monitor error: {e}")
-            await asyncio.sleep(15)
+            logger.error(f"Monitor error: {e}", exc_info=True)
+            await asyncio.sleep(10)
+        finally:
+            if filter_id:
+                try:
+                    w3.eth.uninstall_filter(filter_id)
+                except:
+                    pass
 
 async def process_buy(event):
     global channel
-    if not channel: 
+    if not channel:
         return
-
-    args = event.args
-    tx_hash = event.transactionHash.hex()
-
-    if gainz_is_token0:
-        if args['amount1In'] > 0 and args['amount0Out'] > 0:   # Buy GAINZ
-            gainz_amount = args['amount0Out'] / (10 ** gainz_decimals)
-            cro_amount = args['amount1In'] / 1e18
-        else:
-            return
-    else:
-        if args['amount0In'] > 0 and args['amount1Out'] > 0:
-            gainz_amount = args['amount1Out'] / (10 ** gainz_decimals)
-            cro_amount = args['amount0In'] / 1e18
-        else:
-            return
-
-    if gainz_amount < 100:   # Minimum size filter
-        return
-
-    embed = discord.Embed(
-        title="🟢 **BUY** $GAINZ",
-        description=f"**{gainz_amount:,.2f} GAINZ** for **{cro_amount:,.4f} WCRO**",
-        color=0x00ff00
-    )
-    embed.add_field(
-        name="Links",
-        value=f"[📊 DexScreener](https://dexscreener.com/cronos/0xF7b1095D2af6C81c2d88f0ab44c7c2341BFfc411)\n"
-              f"[🔗 Tx Explorer](https://explorer.cronos.org/tx/0x{tx_hash})",
-        inline=False
-    )
-    embed.set_footer(text="VVS Finance • BUY alerts only • Paid Render")
 
     try:
-        await channel.send(embed=embed)
-    except Exception as e:
-        print(f"Discord send failed: {e}")
+        args = event.args
+        tx_hash = event.transactionHash.hex()
 
+        if gainz_is_token0:
+            if args['amount1In'] > 0 and args['amount0Out'] > 0:  # BUY
+                gainz_amount = args['amount0Out'] / (10 ** gainz_decimals)
+                cro_amount = args['amount1In'] / 1e18
+            else:
+                return
+        else:
+            if args['amount0In'] > 0 and args['amount1Out'] > 0:
+                gainz_amount = args['amount1Out'] / (10 ** gainz_decimals)
+                cro_amount = args['amount0In'] / 1e18
+            else:
+                return
+
+        if gainz_amount < 100:
+            return
+
+        embed = discord.Embed(
+            title="🟢 **BUY** $GAINZ",
+            description=f"**{gainz_amount:,.2f} GAINZ** for **{cro_amount:,.4f} WCRO**",
+            color=0x00ff00
+        )
+        embed.add_field(
+            name="Links",
+            value=f"[📊 DexScreener](https://dexscreener.com/cronos/0xF7b1095D2af6C81c2d88f0ab44c7c2341BFfc411)\n"
+                  f"[🔗 Transaction](https://explorer.cronos.org/tx/0x{tx_hash})",
+            inline=False
+        )
+        embed.set_footer(text="VVS Finance • BUY alerts only")
+
+        await channel.send(embed=embed)
+        logger.info(f"✅ Alert sent: {gainz_amount:,.0f} GAINZ")
+
+    except Exception as e:
+        logger.error(f"Process error: {e}")
+
+# ================== START ==================
 client.run(DISCORD_TOKEN)
