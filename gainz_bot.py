@@ -15,11 +15,9 @@ RPC_URL = "https://cronos-evm-rpc.publicnode.com"
 TOKEN_ADDRESS = "0xF7b1095D2af6C81c2d88f0ab44c7c2341BFfc411"
 PAIR_ADDRESS = "0x3a26c936973635dff0a89ca93e4e62f70514c210"
 
-# Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Web3
 w3 = Web3(Web3.HTTPProvider(RPC_URL, request_kwargs={'timeout': 60}))
 
 if not w3.is_connected():
@@ -54,9 +52,8 @@ token0 = pair_contract.functions.token0().call().lower()
 gainz_is_token0 = token0 == TOKEN_ADDRESS.lower()
 gainz_decimals = token_contract.functions.decimals().call()
 
-logger.info(f"✅ GAINZ is token0: {gainz_is_token0} | Decimals: {gainz_decimals}")
+logger.info(f"✅ Setup complete | GAINZ token0: {gainz_is_token0}")
 
-# Discord
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 channel = None
@@ -68,35 +65,31 @@ async def on_ready():
     channel = client.get_channel(CHANNEL_ID)
     
     if channel:
-        await channel.send("🚀 **GAINZ Buy Bot is now ONLINE** (Fixed v3 - fromBlock)")
-    else:
-        logger.error("❌ Channel not found!")
-
+        await channel.send("🚀 **GAINZ Buy Bot ONLINE** (web3==6.20.0 Fixed)")
     asyncio.create_task(monitor_trades())
 
 async def monitor_trades():
     global channel
-    logger.info("📡 Starting trade monitor...")
+    logger.info("📡 Monitor started...")
 
     while True:
         try:
-            # Use fromBlock (camelCase) for newer web3.py
+            # Use fromBlock (works with pinned web3 6.x)
             swap_filter = pair_contract.events.Swap.create_filter(fromBlock="latest")
-            logger.info("🔄 New Swap filter created")
+            logger.info("🔄 Filter created successfully")
 
             while True:
                 events = swap_filter.get_new_entries()
                 for event in events:
                     await process_buy(event)
-
                 await asyncio.sleep(2)
 
         except Exception as e:
-            error_str = str(e).lower()
-            if "filter not found" in error_str or "filter" in error_str:
-                logger.warning("Filter expired → recreating...")
+            err = str(e).lower()
+            if "filter not found" in err or "filter" in err:
+                logger.warning("Filter expired - recreating")
             else:
-                logger.error(f"Monitor error: {e}", exc_info=True)
+                logger.error(f"Error: {e}", exc_info=True)
             await asyncio.sleep(10)
 
 async def process_buy(event):
@@ -109,13 +102,13 @@ async def process_buy(event):
         tx_hash = event.transactionHash.hex()
 
         if gainz_is_token0:
-            if args['amount1In'] > 0 and args['amount0Out'] > 0:  # BUY
+            if args.get('amount1In', 0) > 0 and args.get('amount0Out', 0) > 0:
                 gainz_amount = args['amount0Out'] / (10 ** gainz_decimals)
                 cro_amount = args['amount1In'] / 1e18
             else:
                 return
         else:
-            if args['amount0In'] > 0 and args['amount1Out'] > 0:
+            if args.get('amount0In', 0) > 0 and args.get('amount1Out', 0) > 0:
                 gainz_amount = args['amount1Out'] / (10 ** gainz_decimals)
                 cro_amount = args['amount0In'] / 1e18
             else:
@@ -135,13 +128,12 @@ async def process_buy(event):
                   f"[🔗 Tx](https://explorer.cronos.org/tx/0x{tx_hash})",
             inline=False
         )
-        embed.set_footer(text="VVS Finance • BUY alerts only")
+        embed.set_footer(text="VVS Finance • BUY alerts")
 
         await channel.send(embed=embed)
-        logger.info(f"✅ BUY Alert sent → {gainz_amount:,.0f} GAINZ")
+        logger.info(f"✅ Alert sent: {gainz_amount:,.0f} GAINZ")
 
     except Exception as e:
-        logger.error(f"Error processing buy: {e}")
+        logger.error(f"Process error: {e}")
 
-# ================== RUN ==================
 client.run(DISCORD_TOKEN)
