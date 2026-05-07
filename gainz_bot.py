@@ -11,8 +11,7 @@ load_dotenv()
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 CHANNEL_ID = int(os.getenv('CHANNEL_ID'))
 
-# BUYBACK WALLET (Hardcoded + Env fallback)
-BUYBACK_WALLET = os.getenv('BUYBACK_WALLET', "0x030D98AE8B40A306c786df56707b90610B281955").lower().strip()
+BUYBACK_WALLET = "0x030D98AE8B40A306c786df56707b90610B281955".lower()
 
 RPC_URL = "https://cronos-evm-rpc.publicnode.com"
 TOKEN_ADDRESS = "0xF7b1095D2af6C81c2d88f0ab44c7c2341BFfc411"
@@ -69,12 +68,12 @@ async def on_ready():
     channel = client.get_channel(CHANNEL_ID)
     
     if channel:
-        await channel.send("🚀 **GAINZ Buy Bot ONLINE** + Buyback Tracker Active 🟠")
+        await channel.send("🚀 **GAINZ Buy Bot ONLINE** + Improved Buyback Tracker")
     asyncio.create_task(monitor_trades())
 
 async def monitor_trades():
     global channel
-    logger.info("📡 Monitor running with Buyback detection...")
+    logger.info("📡 Monitor running...")
 
     last_block = w3.eth.block_number - 5
 
@@ -89,7 +88,7 @@ async def monitor_trades():
                         if tx_hash in seen_tx:
                             continue
                         seen_tx.add(tx_hash)
-                        await process_swap(event)
+                        await process_swap(event, tx_hash)
 
                 last_block = current_block
 
@@ -99,18 +98,17 @@ async def monitor_trades():
             logger.error(f"Monitor error: {e}", exc_info=True)
             await asyncio.sleep(10)
 
-async def process_swap(event):
+async def process_swap(event, tx_hash):
     global channel
     if not channel:
         return
 
     try:
         args = event.args
-        tx_hash = event.transactionHash.hex()
         sender = args.get('sender', '').lower()
         to_addr = args.get('to', '').lower()
 
-        # Check if BUY
+        # Determine if BUY
         if gainz_is_token0:
             is_buy = args.get('amount1In', 0) > 0 and args.get('amount0Out', 0) > 0
             gainz_amount = args['amount0Out'] / (10 ** gainz_decimals) if is_buy else 0
@@ -123,13 +121,23 @@ async def process_swap(event):
         if not is_buy or gainz_amount < 100:
             return
 
-        # Buyback Check
-        is_buyback = (sender == BUYBACK_WALLET or to_addr == BUYBACK_WALLET)
+        # === IMPROVED BUYBACK DETECTION ===
+        is_buyback = False
+        try:
+            tx = w3.eth.get_transaction(tx_hash)
+            tx_from = tx['from'].lower()
+            if tx_from == BUYBACK_WALLET:
+                is_buyback = True
+        except:
+            # Fallback to event addresses
+            if sender == BUYBACK_WALLET or to_addr == BUYBACK_WALLET:
+                is_buyback = True
 
+        # Choose embed style
         if is_buyback:
             title = "🔥 **GAINZ BUYBACK TOKENS** 🔥"
-            color = 0xff8800   # Bright Orange
-            footer = "Official Team Buyback • 0x030D...1955 🦧"
+            color = 0xff8800
+            footer = "Official Team Buyback • 0x030D...1955"
         else:
             title = "🟢 **BUY** $GAINZ"
             color = 0x00ff00
