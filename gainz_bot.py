@@ -60,22 +60,25 @@ seen_tx = set()
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 channel = None
+bot_started = False   # Prevent repeated online messages
 
 @client.event
 async def on_ready():
-    global channel
+    global channel, bot_started
     logger.info(f"✅ Logged in as {client.user}")
     channel = client.get_channel(CHANNEL_ID)
     
-    if channel:
-        await channel.send("🚀 **GAINZ Buy Bot ONLINE** + Improved Buyback Tracker")
+    if channel and not bot_started:
+        await channel.send("🚀 **GAINZ Buy Bot ONLINE** + Buyback Tracker Active")
+        bot_started = True
     asyncio.create_task(monitor_trades())
 
 async def monitor_trades():
     global channel
-    logger.info("📡 Monitor running...")
+    logger.info("📡 Monitor started...")
 
-    last_block = w3.eth.block_number - 5
+    last_block = w3.eth.block_number - 10
+    cleanup_counter = 0
 
     while True:
         try:
@@ -91,12 +94,19 @@ async def monitor_trades():
                         await process_swap(event, tx_hash)
 
                 last_block = current_block
+                cleanup_counter += 1
 
-            await asyncio.sleep(3)
+                # Clean memory every 100 blocks
+                if cleanup_counter >= 100:
+                    if len(seen_tx) > 5000:
+                        seen_tx.clear()
+                    cleanup_counter = 0
+
+            await asyncio.sleep(4)
 
         except Exception as e:
-            logger.error(f"Monitor error: {e}", exc_info=True)
-            await asyncio.sleep(10)
+            logger.error(f"Monitor crashed: {e}", exc_info=True)
+            await asyncio.sleep(15)   # Longer wait on error
 
 async def process_swap(event, tx_hash):
     global channel
@@ -108,7 +118,7 @@ async def process_swap(event, tx_hash):
         sender = args.get('sender', '').lower()
         to_addr = args.get('to', '').lower()
 
-        # Determine if BUY
+        # Detect BUY
         if gainz_is_token0:
             is_buy = args.get('amount1In', 0) > 0 and args.get('amount0Out', 0) > 0
             gainz_amount = args['amount0Out'] / (10 ** gainz_decimals) if is_buy else 0
@@ -121,19 +131,16 @@ async def process_swap(event, tx_hash):
         if not is_buy or gainz_amount < 100:
             return
 
-        # === IMPROVED BUYBACK DETECTION ===
+        # Improved Buyback Detection
         is_buyback = False
         try:
             tx = w3.eth.get_transaction(tx_hash)
-            tx_from = tx['from'].lower()
-            if tx_from == BUYBACK_WALLET:
+            if tx['from'].lower() == BUYBACK_WALLET:
                 is_buyback = True
         except:
-            # Fallback to event addresses
             if sender == BUYBACK_WALLET or to_addr == BUYBACK_WALLET:
                 is_buyback = True
 
-        # Choose embed style
         if is_buyback:
             title = "🔥 **GAINZ BUYBACK TOKENS** 🔥"
             color = 0xff8800
@@ -143,17 +150,8 @@ async def process_swap(event, tx_hash):
             color = 0x00ff00
             footer = "VVS Finance • BUY alerts only"
 
-        embed = discord.Embed(
-            title=title,
-            description=f"**{gainz_amount:,.2f} GAINZ** for **{cro_amount:,.4f} WCRO**",
-            color=color
-        )
-        embed.add_field(
-            name="Links",
-            value=f"[📊 DexScreener](https://dexscreener.com/cronos/0xF7b1095D2af6C81c2d88f0ab44c7c2341BFfc411)\n"
-                  f"[🔗 Transaction](https://explorer.cronos.org/tx/0x{tx_hash})",
-            inline=False
-        )
+        embed = discord.Embed(title=title, description=f"**{gainz_amount:,.2f} GAINZ** for **{cro_amount:,.4f} WCRO**", color=color)
+        embed.add_field(name="Links", value=f"[📊 DexScreener](https://dexscreener.com/cronos/0xF7b1095D2af6C81c2d88f0ab44c7c2341BFfc411)\n[🔗 Tx](https://explorer.cronos.org/tx/0x{tx_hash})", inline=False)
         embed.set_footer(text=footer)
 
         await channel.send(embed=embed)
